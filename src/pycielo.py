@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 
 import urllib
-import xml.dom.minidom
+from xml.dom import minidom as dom
+from datetime import datetime
 
 CIELO_ENDPOINT_TEST = 'https://qasecommerce.cielo.com.br/servicos/ecommwsec.do'
 CIELO_ENDPOINT_PROD = 'https://ecommerce.cbmp.com.br/servicos/ecommwsec.do'
@@ -20,21 +21,35 @@ class Cielo(object):
         self.data = {}
         self.data['vnum'] = vnum
         self.data['vkey'] = vkey
-        self.data['ccbrand'] = 'visa'
-        self.data['ccparts'] = '1'
-        self.data['product'] = '1'
 
-    def get_header_node(self, encoding='UTF-8'):
+    def set_customer(self, number, expiration, security, indicator='1'):
+        ''' Save the customer's credit card information. '''
+
+        self.data['number'] = number
+        self.data['expiration'] = expiration
+        self.data['security'] = security
+        self.data['indicator'] = indicator
+
+    def set_demand(self, demand, value, currency='986', language='PT'):
+        ''' Save the customer's credit card information. '''
+
+        self.data['demand'] = demand
+        self.data['value'] = value
+        self.data['currency'] = currency
+        self.data['language'] = language
+
+    def render_header(self, encoding='UTF-8'):
         ''' Returns the XML node with header data. '''
 
         return '<?xml version="1.0" encoding="%s"?>' % encoding
 
-    def get_transaction_node(self):
+    def render_transaction(self):
         ''' Returns the XML node with transaction data. '''
 
+        self.create_transaction()
         return '<tid>%s</tid>' % self.data['tid']
 
-    def get_vendor_node(self):
+    def render_vendor(self):
         ''' Returns the XML node with vendor data. '''
 
         content  = '<dados-ec>'
@@ -43,17 +58,40 @@ class Cielo(object):
         content += '</dados-ec>'
         return content
 
-    def get_payment_node(self):
+    def render_payment(self):
         ''' Returns the XML node with payment data. '''
 
         content  = '<forma-pagamento>'
-        content += '<bandeira>%s</bandeira>' % self.data['ccbrand']
+        content += '<bandeira>%s</bandeira>' % self.data['brand']
         content += '<produto>%s</produto>' % self.data['product']
-        content += '<parcelas>%s</parcelas>' % self.data['ccparts']
+        content += '<parcelas>%s</parcelas>' % self.data['parts']
         content += '</forma-pagamento>'
         return content
 
-    def request_transaction_id(self, force_request=False):
+    def render_demand(self):
+        ''' Returns the XML node with demand data. '''
+
+        content  = '<dados-pedido>'
+        content += '<numero>%s</numero>' % self.data['demand']
+        content += '<valor>%s</valor>' % self.data['value']
+        content += '<moeda>%s</moeda>' % self.data['currency']
+        content += '<data-hora>%s</data-hora>' % datetime.now().strftime('%Y-%m-%dT%T')
+        content += '<idioma>PT</idioma>'
+        content += '</dados-pedido>'
+        return content
+
+    def render_customer(self):
+        ''' Request a transaction ID. '''
+
+        content  = '<dados-cartao>'
+        content += '<numero>%s</numero>' % self.data['demand']
+        content += '<validade>%s</validade>' % self.data['expiration']
+        content += '<indicador>%s</indicador>' % self.data['indicator']
+        content += '<codigo-seguranca>%s</codigo-seguranca>' % self.data['security']
+        content += '</dados-cartao>'
+        return content
+
+    def create_transaction(self, force_request=False):
         ''' Request a transaction ID. '''
 
         ## returns the current transaction if exists
@@ -61,36 +99,42 @@ class Cielo(object):
             return self.data['tid']
 
         ## requests a new transaction id
-        content  = self.get_header_node()
+        content  = self.render_header()
         content += '<requisicao-tid id="1" versao="%s">' % self.version
-        content += self.get_vendor_node()
-        content += self.get_payment_node()
+        content += self.render_vendor()
+        content += self.render_payment()
         content += '</requisicao-tid>'
 
         ## extract the desired information
-        #dom = xml.dom.minidom.parseString(self.fetch_response(content))
-        self.data['tid'] = '1' #dom.getElementsByTagName("tid")[0]
+        xml = self._fetch_response(content)
+        self.data['tid'] = '1' #xml.getElementsByTagName("tid")[0]
         return self.data['tid']
 
-    def request_customer_authorization(self):
+    def get_authorization(self, brand, parts='1', product='1'):
         ''' Returns the XML node with payment data. '''
 
-        content  = self.get_header_node()
+        ## sets the payment information
+        self.data['brand'] = brand
+        self.data['parts'] = parts
+        self.data['product'] = product
+
+        content  = self.render_header()
         content += '<requisicao-autorizacao-portador id="7" versao="%s">' % self.version
-        content += self.get_transaction_node()
-        content += self.get_vendor_node()
-        #content += self.getDadosCartao()
-        #content += self.getDadosPedido()
-        content += self.get_payment_node()
+        content += self.render_transaction()
+        content += self.render_vendor()
+        content += self.render_demand()
+        content += self.render_customer()
+        content += self.render_payment()
         content += '<capturar-automaticamente>false</capturar-automaticamente>'
         content += '</requisicao-autorizacao-portador>'
         return content
 
-    def fetch_response(self, content):
+    def _fetch_response(self, content):
         ''' Consumes the webservice and fetches its response. '''
         
-        query = urllib.urlencode({ 'mensagem':content })
-        return urllib.urlopen(self.cielo_endpoint, query).read()
+        args = urllib.urlencode({ 'mensagem':content })
+        code = urllib.urlopen(self.cielo_endpoint, args).read()
+        return dom.parseString(code)
 
 
 if __name__ == '__main__':
@@ -101,6 +145,7 @@ if __name__ == '__main__':
 
     ## consumes the webservice
     c = Cielo(TEST_VENDOR_NUM, TEST_VENDOR_KEY, cielo_endpoint=CIELO_ENDPOINT_TEST)
-    c.request_transaction_id()
-    a = c.request_customer_authorization()
-    #print c.data['tid']
+    c.set_customer('', '', '')
+    c.set_demand('1', '100.00')
+    r = c.get_authorization('visa')
+    print dom.parseString(r).toprettyxml()
